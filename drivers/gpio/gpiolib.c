@@ -648,18 +648,48 @@ static ssize_t gpio_active_low_store(struct device *dev,
 	return status ? : size;
 }
 
-static const DEVICE_ATTR(active_low, 0644,
+static DEVICE_ATTR(active_low, 0644,
 		gpio_active_low_show, gpio_active_low_store);
 
-static const struct attribute *gpio_attrs[] = {
+static umode_t gpio_is_visible(struct kobject *kobj, struct attribute *attr,
+                              int n)
+{
+       struct device *dev = container_of(kobj, struct device, kobj);
+       struct gpio_desc *desc = dev_get_drvdata(dev);
+       unsigned gpio = desc - gpio_desc;
+       umode_t mode = attr->mode;
+       bool show_direction = test_bit(FLAG_SYSFS_DIR, &desc->flags);
+
+       if (attr == &dev_attr_direction.attr) {
+               if (!show_direction)
+                       mode = 0;
+       } else if (attr == &dev_attr_edge.attr) {
+               if (gpio_to_irq(gpio) < 0)
+                       mode = 0;
+               if (!show_direction && test_bit(FLAG_IS_OUT, &desc->flags))
+                       mode = 0;
+       }
+
+       return mode;
+}
+
+static struct attribute *gpio_attrs[] = {
+        &dev_attr_direction.attr,
+        &dev_attr_edge.attr,
 	&dev_attr_value.attr,
 	&dev_attr_active_low.attr,
 	&dev_attr_pull.attr,
 	NULL,
 };
 
-static const struct attribute_group gpio_attr_group = {
-	.attrs = (struct attribute **) gpio_attrs,
+static const struct attribute_group gpio_group = {
+        .attrs = gpio_attrs,
+        .is_visible = gpio_is_visible,
+};
+
+static const struct attribute_group *gpio_groups[] = {
+        &gpio_group,
+        NULL
 };
 
 /*
@@ -703,7 +733,6 @@ static struct attribute *gpiochip_attrs[] = {
 	NULL,
 };
 ATTRIBUTE_GROUPS(gpiochip);
-ATTRIBUTE_GROUPS(gpio);
 
 /*
  * /sys/class/gpio/export ... write-only
@@ -1020,7 +1049,6 @@ static int gpiochip_export(struct gpio_chip *chip)
 	 */
 	if (!gpio_class.p)
 		return 0;
-                
 
 	/* use chip->base for the ID; it's already known to be unique */
 	mutex_lock(&sysfs_lock);
