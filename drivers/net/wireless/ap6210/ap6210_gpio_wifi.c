@@ -210,7 +210,7 @@ void ap6210_gpio_init(void)
 	ops->gpio_ctrl	= ap6210_gpio_ctrl;
 	ops->power = ap6210_power;
 
-	ap6210_gpio_ctrl("ap6210_wl_vdd_en", 0); /*enable the vdd*/
+	ap6210_gpio_ctrl("ap6210_wl_vdd_en", 1); /*enable the vdd*/
 	
 }
 
