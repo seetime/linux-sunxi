@@ -15,9 +15,6 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/gpio.h>
 
-#include <plat/sys_config.h>
-#include "gpio-sunxi.h"
-
 /* Optional implementation infrastructure for GPIO interfaces.
  *
  * Platforms may want to use this if they tend to use very many GPIOs
@@ -85,11 +82,6 @@ static inline void desc_set_label(struct gpio_desc *d, const char *label)
 #ifdef CONFIG_DEBUG_FS
 	d->label = label;
 #endif
-}
-
-static inline struct sunxi_gpio_chip *__to_sunxi_gpio(struct gpio_chip *chip)
-{
-	return container_of(chip, struct sunxi_gpio_chip, chip);
 }
 
 /* Warn when drivers omit gpio_request() calls -- legal but ill-advised
@@ -226,9 +218,6 @@ static DEFINE_MUTEX(sysfs_lock);
  *      * is read/write as zero/nonzero
  *      * also affects existing and subsequent "falling" and "rising"
  *        /edge configuration
- *   /pullupdn
- *      * always readable, subject to hardware behavior
- *      * may be writable, as "disable", "up" or down"
  */
 
 static ssize_t gpio_direction_show(struct device *dev,
@@ -333,100 +322,6 @@ static ssize_t gpio_value_store(struct device *dev,
 
 static DEVICE_ATTR(value, 0644,
 		gpio_value_show, gpio_value_store);
-
-/* Get gpio pull value */
-int __sunxi_gpio_pull_get(unsigned gpio)
-{
-    user_gpio_set_t gpio_info[1];
-	int ret;
-	struct gpio_chip *chip = gpio_to_chip(gpio);
-	struct sunxi_gpio_chip *sgpio = __to_sunxi_gpio(chip);
-
-    if (gpio > 0)
-    ret = gpio_get_one_pin_status(sgpio->data[gpio].gpio_handler,
-                gpio_info, sgpio->data[gpio].pin_name, 1);
-    else
-        return 0;
-
-	return gpio_info->pull;
-}
-EXPORT_SYMBOL_GPL(__sunxi_gpio_pull_get);
-
-/* Set gpio pull value */
-int __sunxi_gpio_pull_set(unsigned gpio, int value)
-{
-	int ret;
-	struct gpio_chip *chip = gpio_to_chip(gpio);
-	struct sunxi_gpio_chip *sgpio = __to_sunxi_gpio(chip);
-
-    if (gpio > 0)
-	    ret = gpio_set_one_pin_pull(sgpio->data[gpio].gpio_handler,
-					    value, sgpio->data[gpio].pin_name);
-    else
-        return -1;
-
-	return ret;
-}
-EXPORT_SYMBOL_GPL(__sunxi_gpio_pull_set);
-
-static ssize_t gpio_pull_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	const struct gpio_desc	*desc = dev_get_drvdata(dev);
-	unsigned		gpio = desc - gpio_desc;
-	ssize_t			status;
-
-    gpio = gpio -1;
-	mutex_lock(&sysfs_lock);
-
-	if (!test_bit(FLAG_EXPORT, &desc->flags))
-		status = -EIO;
-	else {
-		int value;
-
-		value = __sunxi_gpio_pull_get(gpio);
-
-	    if (value == 0)
-		    status = sprintf(buf, "disable\n");
-	    else if (value == 1)
-		    status = sprintf(buf, "up\n");
-	    else if (value == 2)
-		    status = sprintf(buf, "down\n");
-	    else
-		    status = sprintf(buf, "unknown\n");
-	}
-
-	mutex_unlock(&sysfs_lock);
-	return status;
-}
-
-static ssize_t gpio_pull_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t size)
-{
-	const struct gpio_desc	*desc = dev_get_drvdata(dev);
-	unsigned		gpio = desc - gpio_desc;
-	ssize_t			status;
-
-    gpio = gpio -1;
-	mutex_lock(&sysfs_lock);
-
-	if (!test_bit(FLAG_EXPORT, &desc->flags))
-		status = -EIO;
-	else if (sysfs_streq(buf, "disable"))
-		status = __sunxi_gpio_pull_set(gpio, 0);
-	else if (sysfs_streq(buf, "up"))
-		status = __sunxi_gpio_pull_set(gpio, 1);
-	else if (sysfs_streq(buf, "down"))
-		status = __sunxi_gpio_pull_set(gpio, 2);
-	else
-		status = -EINVAL;
-
-	mutex_unlock(&sysfs_lock);
-	return status ? : size;
-}
-
-static /* const */ DEVICE_ATTR(pull, 0644,
-		gpio_pull_show, gpio_pull_store);
 
 static irqreturn_t gpio_sysfs_irq(int irq, void *priv)
 {
@@ -652,44 +547,43 @@ static DEVICE_ATTR(active_low, 0644,
 		gpio_active_low_show, gpio_active_low_store);
 
 static umode_t gpio_is_visible(struct kobject *kobj, struct attribute *attr,
-                              int n)
+			       int n)
 {
-       struct device *dev = container_of(kobj, struct device, kobj);
-       struct gpio_desc *desc = dev_get_drvdata(dev);
-       unsigned gpio = desc - gpio_desc;
-       umode_t mode = attr->mode;
-       bool show_direction = test_bit(FLAG_SYSFS_DIR, &desc->flags);
+	struct device *dev = container_of(kobj, struct device, kobj);
+	struct gpio_desc *desc = dev_get_drvdata(dev);
+	unsigned gpio = desc - gpio_desc;
+	umode_t mode = attr->mode;
+	bool show_direction = test_bit(FLAG_SYSFS_DIR, &desc->flags);
 
-       if (attr == &dev_attr_direction.attr) {
-               if (!show_direction)
-                       mode = 0;
-       } else if (attr == &dev_attr_edge.attr) {
-               if (gpio_to_irq(gpio) < 0)
-                       mode = 0;
-               if (!show_direction && test_bit(FLAG_IS_OUT, &desc->flags))
-                       mode = 0;
-       }
+	if (attr == &dev_attr_direction.attr) {
+		if (!show_direction)
+			mode = 0;
+	} else if (attr == &dev_attr_edge.attr) {
+		if (gpio_to_irq(gpio) < 0)
+			mode = 0;
+		if (!show_direction && test_bit(FLAG_IS_OUT, &desc->flags))
+			mode = 0;
+	}
 
-       return mode;
+	return mode;
 }
 
 static struct attribute *gpio_attrs[] = {
-        &dev_attr_direction.attr,
-        &dev_attr_edge.attr,
+	&dev_attr_direction.attr,
+	&dev_attr_edge.attr,
 	&dev_attr_value.attr,
 	&dev_attr_active_low.attr,
-	&dev_attr_pull.attr,
 	NULL,
 };
 
 static const struct attribute_group gpio_group = {
-        .attrs = gpio_attrs,
-        .is_visible = gpio_is_visible,
+	.attrs = gpio_attrs,
+	.is_visible = gpio_is_visible,
 };
 
 static const struct attribute_group *gpio_groups[] = {
-        &gpio_group,
-        NULL
+	&gpio_group,
+	NULL
 };
 
 /*
