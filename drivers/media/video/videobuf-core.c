@@ -771,11 +771,23 @@ EXPORT_SYMBOL_GPL(videobuf_streamon);
 /* Locking: Caller holds q->vb_lock */
 static int __videobuf_streamoff(struct videobuf_queue *q)
 {
+	int i;
 	if (!q->streaming)
 		return -EINVAL;
 
 	videobuf_queue_cancel(q);
+	for (i = 0; i < VIDEO_MAX_FRAME; i++) {
+		if (NULL == q->bufs[i])
+			continue;
+		kfree(q->bufs[i]);
+		q->bufs[i] = NULL;
+	}
+	q->read_buf = NULL;
 
+	if (!list_empty(&q->stream)) {
+		dprintk(1, "%s: stream running\n", __func__);
+		return -EBUSY;
+	}
 	return 0;
 }
 
