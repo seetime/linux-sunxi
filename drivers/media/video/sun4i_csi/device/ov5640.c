@@ -78,6 +78,17 @@ MODULE_LICENSE("GPL");
 #define REG_DATA_STEP 1
 #define REG_STEP 			(REG_ADDR_STEP+REG_DATA_STEP)
 
+
+	// When 0x3035=0x21, 0x3036=0x46, stable 15fps
+	// When 0x3035=0x11, 0x3036=0x46, UNSTABLE 30fps
+	// When 0x3035=0x11, 0x3036=0x38, stable(?) 24.27fpss
+	// When 0x3035=0x11, 0x3036=0x36, stable(?) 23.3fps
+	// When 0x3035=0x11, 0x3036=0x32, stable(?) 21fps
+	// When 0x3035=0x11, 0x3036=0x28, stable(?) 17fps
+	
+#define	REG_VAL_3035	0x11
+#define	REG_VAL_3036	0x46
+
 /*
  * Basic window sizes.  These probably belong somewhere more globally
  * useful.
@@ -1569,8 +1580,12 @@ static struct regval_list sensor_vga_regs[] = { //VGA:  640*480
 	{{0x38,0x0e},{0x3 }},
 	{{0x38,0x0f},{0xd8}},*/
 
-	{{0x30,0x35},{0x21}},//
-	{{0x30,0x36},{0x46}},//0x46->30fps
+	// When 0x3035=0x21, 0x3036=0x46, stable 15fps
+	// When 0x3035=0x11, 0x3036=0x46, UNSTABLE 30fps
+	// When 0x3035=0x11, 0x3036=0x32, stable(?) 21fps
+	// When 0x3035=0x11, 0x3036=0x28, stable(?) 17fps
+	{{0x30,0x35},{REG_VAL_3035}},// 0x21 -> 15fps, 
+	{{0x30,0x36},{REG_VAL_3036}},//0x46->30fps
 	{{0x30,0x37},{0x13}},//////div
 
 	{{0x35,0x03},{0x00}},
@@ -1605,8 +1620,8 @@ static struct regval_list sensor_vga_regs[] = { //VGA:  640*480
 	{{0x3a,0x14},{0x03}},
 	{{0x3a,0x15},{0xd8}},
 	{{0x40,0x04},{0x02}},
-	{{0x30,0x35},{0x21}}, //fps
-	{{0x30,0x36},{0x46}}, //fps
+	{{0x30,0x35},{REG_VAL_3035}}, // 0x21 -> 15fps, 
+	{{0x30,0x36},{REG_VAL_3036}}, //fps
 	{{0x48,0x37},{0x22}},
 	{{0x50,0x01},{0xa3}},
 };
@@ -2090,6 +2105,71 @@ static int sensor_write_array(struct v4l2_subdev *sd, struct regval_list *vals ,
 	return 0;
 }
 
+
+static int ov5640_read_reg(struct v4l2_subdev *sd, u16 reg, u8 *val)
+{
+	int ret;
+	struct regval_list regs;
+
+	regs.reg_num[0] = reg >> 8;
+	regs.reg_num[1] = reg & 0xff;
+	regs.value[0] = 0;
+	ret = sensor_read(sd, regs.reg_num, regs.value);
+	if (ret < 0) {
+		csi_dev_err("sensor_read err at sensor_s_hflip!\n");
+		return ret;
+	}
+	*val = regs.value[0];
+
+
+	return regs.value[0];
+}
+
+/* calculate sysclk */
+static int ov5640_get_sysclk(struct v4l2_subdev *sd)
+{
+	struct sensor_info *info = to_state(sd);
+
+	int xvclk = info->ccm_info->mclk;		//24000000/10000=2400=xvclk
+	int sysclk;
+	int temp1, temp2;
+	unsigned int Multiplier, PreDiv, VCO, SysDiv, Pll_rdiv, Bit_div2x, sclk_rdiv;
+	int sclk_rdiv_map[] = {1, 2, 4, 8};
+	u8 regval = 0;
+
+	temp1 = ov5640_read_reg(sd, 0x3034, &regval);	//0x1a
+	temp2 = temp1 & 0x0f;
+	if (temp2 == 8 || temp2 == 10) {
+		Bit_div2x = temp2 / 2;					//0xa/2=5=Bit_div2x
+	} else {
+		pr_err("ov5640: unsupported bit mode %d\n", temp2);
+		return -1;
+	}
+
+	temp1 = ov5640_read_reg(sd, 0x3035, &regval);		//0x11
+	SysDiv = temp1 >> 4;							//0x1=SysDiv
+	if (SysDiv == 0)
+		SysDiv = 16;
+
+	temp1 = ov5640_read_reg(sd, 0x3036, &regval);		//0x46
+	Multiplier = temp1;								//0x46=Multiplier
+	temp1 = ov5640_read_reg(sd, 0x3037, &regval);		//0x13
+	PreDiv = temp1 & 0x0f;							//0x3=PreDiv
+	Pll_rdiv = ((temp1 >> 4) & 0x01) + 1;			//2=Pll_rdiv
+
+	temp1 = ov5640_read_reg(sd, 0x3108, &regval);		//0x01
+	temp2 = temp1 & 0x03;			
+
+	sclk_rdiv = sclk_rdiv_map[temp2];				//sclk_rdiv_map[1]=2=sclk_rdiv
+	//VCO = xvclk * Multiplier / PreDiv;
+	VCO = (xvclk / PreDiv ) * Multiplier ;
+	sysclk = VCO / SysDiv / Pll_rdiv * 2 / Bit_div2x / sclk_rdiv;
+
+	printk(KERN_INFO"[ooo] [0x3108]=%d xvclk=%d, VCO=%d, SysDiv=%d, Pll_rdiv=%d, Bit_div2x=%d sclk_rdiv=%d\n", 
+		temp1, xvclk, VCO, SysDiv, Pll_rdiv, Bit_div2x, sclk_rdiv);
+
+	return sysclk;
+}
 
 /*
  * Stuff that knows about the sensor.
@@ -3757,4 +3837,3 @@ static __exit void exit_sensor(void)
 
 module_init(init_sensor);
 module_exit(exit_sensor);
-

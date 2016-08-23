@@ -700,7 +700,7 @@ static long disp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			return -1;
 		}
 	}
-	if (suspend_status & 2) {
+	if ( (suspend_status & 2) &&(cmd != DISP_CMD_RESUME) ) {
 		__wrn("ioctl:%x fail when in suspend!\n", cmd);
 		return -1;
 	}
